@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Git
+.git/
+
+# IDE
+.vscode/
+.idea/
+
+# Android / Gradle generated files
+.gradle/
+**/build/
+**/.cxx/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

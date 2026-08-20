@@ -1,0 +1,46 @@
+# Node.js
+node_modules/
+**/node_modules/
+
+# Python
+venv/
+.venv/
+env/
+**/venv/
+__pycache__/
+*.py[cod]
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+
+# Build / Cache
+dist/
+build/
+.cache/
+coverage/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Android
+.gradle/
+local.properties
+
+# Python cache
+.pytest_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Archives
+*.zip
