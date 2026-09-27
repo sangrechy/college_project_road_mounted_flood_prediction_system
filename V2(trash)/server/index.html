@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flood Sentry | Live Map</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        /* CSS VARIABLES FOR THEME SWITCHING */
+        :root {
+            --bg: #f8f9fa; --card-bg: #ffffff; --text: #212529; --border: #dee2e6;
+            --danger: #dc3545; --success: #198754; --shadow: rgba(0,0,0,0.1);
+        }
+        [data-theme="dark"] {
+            --bg: #121212; --card-bg: #1e1e1e; --text: #e0e0e0; --border: #333;
+            --danger: #ff4757; --success: #2ed573; --shadow: rgba(0,0,0,0.5);
+        }
+
+        body { margin: 0; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; transition: 0.3s; }
+
+        /* HEADER */
+        .header {
+            position: absolute; top: 0; left: 0; width: 100%; height: 60px;
+            background: var(--card-bg); opacity: 0.95; 
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 20px; box-sizing: border-box; z-index: 2000; border-bottom: 1px solid var(--border);
+            box-shadow: 0 2px 10px var(--shadow);
+        }
+        .brand { font-size: 1.2rem; font-weight: 700; letter-spacing: 1px; }
+        .controls { display: flex; gap: 10px; }
+        
+        button {
+            border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: 0.2s;
+            background: var(--border); color: var(--text);
+        }
+        .btn-sos { background: var(--danger); color: white; animation: pulse 2s infinite; }
+        .btn-theme { background: transparent; border: 1px solid var(--border); }
+
+        /* MAP & PANELS */
+        #map { height: 100vh; width: 100vw; z-index: 1; }
+        
+        .panel {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            width: 90%; max-width: 600px; background: var(--card-bg);
+            padding: 15px; border-radius: 12px; z-index: 1000; border: 1px solid var(--border);
+            box-shadow: 0 5px 20px var(--shadow);
+        }
+        
+        /* SOS OVERLAY */
+        #sos-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(220, 53, 69, 0.9); z-index: 5000;
+            flex-direction: column; justify-content: center; align-items: center; color: white;
+            text-align: center; animation: flash 0.5s infinite alternate;
+        }
+
+        /* HISTORY MODAL */
+        #history-modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 3000; justify-content: center; align-items: center;
+        }
+        .modal-content {
+            background: var(--card-bg); width: 500px; max-height: 80vh; overflow-y: auto;
+            padding: 20px; border-radius: 12px;
+        }
+        .alert-item { padding: 10px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+        .alert-SOS { color: var(--danger); font-weight: bold; }
+
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
+        @keyframes flash { from { opacity: 0.8; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <div id="sos-overlay">
+        <h1 style="font-size: 5rem; margin:0;">🆘</h1>
+        <h1>EMERGENCY ALERT</h1>
+        <p>FLOOD SOS TRIGGERED</p>
+        <button onclick="dismissSOS()" style="background:white; color:red; font-size:1.2rem; padding:10px 30px;">DISMISS</button>
+    </div>
+
+    <div class="header">
+        <div class="brand">🌊 FLOOD SENTRY</div>
+        <div class="controls">
+            <button class="btn-theme" onclick="toggleTheme()">🌗 THEME</button>
+            <button class="btn-history" onclick="toggleHistory()">📜 HISTORY</button>
+            <button class="btn-sos" onclick="triggerSOS()">🚨 SOS</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="panel">
+        <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+            <span>Prediction Timeline</span>
+            <span id="timeDisplay" style="color:var(--success)">LIVE DATA</span>
+        </div>
+        <input type="range" id="timeSlider" min="0" max="6" value="0" style="width:100%">
+    </div>
+
+    <div id="history-modal">
+        <div class="modal-content">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h2>⚠️ Alert History</h2>
+                <button onclick="toggleHistory()">CLOSE</button>
+            </div>
+            <div id="alert-list">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const map = L.map('map', { zoomControl: false }).setView([12.9716, 77.5946], 15);
+        
+        // TILE LAYERS
+        const darkTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png');
+        const lightTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png');
+        
+        let currentLayer = darkTiles; // Default
+        currentLayer.addTo(map);
+
+        const markers = {};
+
+        // 1. THEME SWITCHER
+        function toggleTheme() {
+            const html = document.documentElement;
+            if (html.getAttribute('data-theme') === 'dark') {
+                html.setAttribute('data-theme', 'light');
+                map.removeLayer(darkTiles);
+                lightTiles.addTo(map);
+            } else {
+                html.setAttribute('data-theme', 'dark');
+                map.removeLayer(lightTiles);
+                darkTiles.addTo(map);
+            }
+        }
+
+        // 2. SOS LOGIC (SEND TO SERVER)
+        function triggerSOS() {
+            if(confirm("⚠️ ARE YOU SURE? This will alert ALL users.")) {
+                socket.emit('sos-trigger', { msg: "Manual Alert" }); // Send to Server
+            }
+        }
+
+        // 3. RECEIVE SOS (FROM SERVER)
+        socket.on('sos-broadcast', (alert) => {
+            document.getElementById('sos-overlay').style.display = 'flex';
+            // Optional: Play Sound
+            // new Audio('alarm.mp3').play();
+        });
+
+        function dismissSOS() {
+            document.getElementById('sos-overlay').style.display = 'none';
+        }
+
+        // 4. MAP UPDATES
+        function getIcon(color, dir) {
+            return L.divIcon({
+                className: 'arrow-icon',
+                html: `<div style="transform: rotate(${dir}deg); color: ${color}; font-size: 28px;">➤</div>`,
+                iconSize: [30, 30], iconAnchor: [15, 15]
+            });
+        }
+
+        socket.on('map-update', (data) => {
+            const color = data.s1 < 50 ? '#ff4757' : '#2ed573';
+            const pos = [data.lat, data.lon];
+
+            if (!markers[data.nodeId]) {
+                markers[data.nodeId] = L.marker(pos, { icon: getIcon(color, data.flowDir) }).addTo(map);
+            } else {
+                markers[data.nodeId].setLatLng(pos).setIcon(getIcon(color, data.flowDir));
+            }
+        });
+
+        // 5. HISTORY
+        async function toggleHistory() {
+            const modal = document.getElementById('history-modal');
+            if (modal.style.display === 'flex') {
+                modal.style.display = 'none';
+            } else {
+                modal.style.display = 'flex';
+                const res = await fetch('/api/alerts');
+                const alerts = await res.json();
+                document.getElementById('alert-list').innerHTML = alerts.map(a => `
+                    <div class="alert-item">
+                        <span class="alert-${a.type}"><b>${a.type}</b></span>
+                        <span>${a.message}</span>
+                        <span style="opacity:0.6; font-size:0.8rem;">${new Date(a.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                `).join('');
+            }
+        }
+    </script>
+</body>
+</html>

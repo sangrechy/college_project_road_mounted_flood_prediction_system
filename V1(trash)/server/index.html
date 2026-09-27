@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flood Sentry Command</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #0d6efd; --bg: #f8f9fa; --card-bg: #ffffff; --text: #212529; --border: #dee2e6;
+            --success: #198754; --danger: #dc3545; --warning: #ffc107; --offline: #6c757d; --expired: #495057;
+        }
+        [data-theme="dark"] {
+            --primary: #3d8bfd; --bg: #121212; --card-bg: #1e1e1e; --text: #e0e0e0; --border: #333; --offline: #444; --expired: #6c757d;
+        }
+        body { margin: 0; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; min-height: 100vh; transition: 0.3s; }
+
+        /* NAV & LAYOUT */
+        .navbar { padding: 15px 40px; background: var(--card-bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+        .brand { font-weight: 700; font-size: 1.2rem; color: var(--primary); display: flex; align-items: center; gap: 10px; }
+        .nav-items { display: flex; align-items: center; gap: 15px; }
+        .container { width: 100%; max-width: 1400px; margin: 30px auto; padding: 0 40px; flex: 1; box-sizing: border-box; }
+        
+        /* THEME SWITCH */
+        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--primary); }
+        input:checked + .slider:before { transform: translateX(24px); }
+
+        /* CARDS */
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 25px; margin-top: 20px; }
+        .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 25px; transition: 0.2s; cursor: pointer; }
+        .card:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+        .card.danger { border-left: 5px solid var(--danger); animation: pulseBorder 2s infinite; }
+        .card.safe { border-left: 5px solid var(--success); }
+        .card.offline { opacity: 0.6; border-left: 5px solid var(--offline); }
+        
+        /* SENSOR ROWS IN CARD */
+        .metric-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.95rem; }
+        .metric-label { color: #888; }
+        .metric-val { font-family: monospace; font-weight: 600; }
+        /* Style specifically for error messages like 'SIGNAL LOSS' */
+        .val-error { color: var(--warning); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.5px; }
+
+        /* BADGES */
+        .badge { padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; color: white; letter-spacing: 0.5px; }
+        .bg-green { background: var(--success); }
+        .bg-red { background: var(--danger); }
+        .bg-gray { background: var(--offline); }
+
+        /* BUTTONS */
+        .btn-sos { background: var(--danger); color: white; border: none; padding: 10px 20px; border-radius: 30px; font-weight: bold; cursor: pointer; display: flex; gap: 8px; }
+        .btn-history { background: var(--card-bg); color: var(--text); border: 1px solid var(--border); padding: 10px 20px; border-radius: 30px; cursor: pointer; font-weight: 600; }
+        .btn-history:hover { background: var(--border); }
+        
+        /* SOS FULLSCREEN OVERLAY */
+        .sos-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(220, 38, 38, 0.95); z-index: 9999;
+            display: none; flex-direction: column; justify-content: center; align-items: center; color: white; text-align: center;
+        }
+        .sos-btn-group { margin-top: 30px; display: flex; gap: 20px; }
+        .btn-big { padding: 20px 30px; font-size: 1.2rem; border-radius: 10px; font-weight: bold; cursor: pointer; border: none; }
+        .btn-ack { background: white; color: #333; }
+        .btn-ignore { background: transparent; border: 2px solid white; color: white; }
+
+        /* HISTORY MODAL */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 2000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
+        .modal { background: var(--card-bg); width: 90%; max-width: 800px; padding: 30px; border-radius: 12px; position: relative; border: 1px solid var(--border); max-height: 80vh; overflow-y: auto; }
+        
+        .history-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; margin-bottom: 10px; border-radius: 8px; border: 1px solid var(--border); }
+        .h-active { background: rgba(220, 53, 69, 0.15); border-color: var(--danger); }
+        .h-resolved { background: var(--card-bg); opacity: 0.6; filter: grayscale(1); }
+        .h-expired { background: var(--card-bg); opacity: 0.5; border-color: var(--offline); }
+        
+        .h-status { font-weight: bold; padding: 5px 10px; border-radius: 5px; font-size: 0.85rem; }
+        .tag-live { background: var(--danger); color: white; animation: flash 1s infinite; }
+        .tag-done { background: var(--success); color: white; }
+        .tag-exp { background: var(--expired); color: white; }
+
+        .btn-resolve-small { background: var(--success); color: white; border: none; padding: 8px 15px; border-radius: 5px; font-weight: bold; cursor: pointer; }
+
+        /* TANK MODAL */
+        .tank-grid { display: flex; justify-content: space-around; margin-top: 40px; }
+        .tank { height: 150px; width: 60px; border: 3px solid var(--text); border-radius: 8px; position: relative; background: rgba(0,0,0,0.05); display: flex; align-items: flex-end; }
+        .liquid { width: 100%; background: var(--primary); transition: height 0.3s; }
+
+        @keyframes flash { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        @keyframes pulseBorder { 0% { border-color: var(--danger); } 50% { border-color: transparent; } 100% { border-color: var(--danger); } }
+    </style>
+</head>
+<body>
+
+    <div class="sos-overlay" id="sos-screen">
+        <h1>🚨 SOS ALERT 🚨</h1>
+        <h2 id="sos-msg" style="margin-top:20px;">...</h2>
+        <div class="sos-btn-group">
+            <button class="btn-big btn-ignore" onclick="ignoreAlert()">⛔ IGNORE (Minimize)</button>
+            <button class="btn-big btn-ack" onclick="acknowledgeAlert()">🔕 ACKNOWLEDGE (Silence)</button>
+        </div>
+    </div>
+
+    <nav class="navbar">
+        <div class="brand">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 22h20L12 2z"/></svg>
+            Flood Sentry Enterprise
+        </div>
+        <div class="nav-items">
+            <button class="btn-history" onclick="openHistory()">📜 Alert History</button>
+            <button class="btn-sos" onclick="sendSOS()"><span>🚨</span> SEND SOS</button>
+            <label class="switch"><input type="checkbox" id="theme-toggle" onchange="toggleTheme(this)"><span class="slider"></span></label>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header-row" style="display:flex; justify-content:space-between; margin-bottom:20px; border-bottom:2px solid var(--border); padding-bottom:15px;">
+            <div style="display:flex; align-items:center">
+                <h2>Live Sensor Grid</h2>
+                <span id="node-count" style="margin-left:15px; background:var(--border); padding:5px 10px; border-radius:20px; font-size:0.8rem; font-weight:bold;">Loading...</span>
+            </div>
+            <div id="status-indicator" style="color:var(--success); font-weight:bold;">● System Normal</div>
+        </div>
+        <div class="grid" id="node-grid"></div>
+        <div id="empty-state" style="margin-top:20px; color:#777;">Waiting for node connections...</div>
+    </div>
+
+    <div class="modal-overlay" id="node-modal" onclick="closeNodeModal(event)">
+        <div class="modal">
+            <button style="float:right; background:none; border:none; font-size:2rem; cursor:pointer; color:var(--text)" onclick="closeNodeModal(true)">×</button>
+            <h2 id="m-title">NODE DETAILS</h2>
+            <div class="tank-grid">
+                <div><div class="tank"><div class="liquid" id="m-l1"></div></div><br>S1: <b id="m-v1">--</b></div>
+                <div><div class="tank"><div class="liquid" id="m-l2"></div></div><br>S2: <b id="m-v2">--</b></div>
+                <div><div class="tank"><div class="liquid" id="m-l3"></div></div><br>S3: <b id="m-v3">--</b></div>
+            </div>
+            
+            <div style="margin-top:30px; padding:20px; background:rgba(0,0,0,0.03); border-radius:10px; text-align:center;">
+                 <h3 style="margin:0 0 10px 0;">🌧️ RAIN SENSOR DATA</h3>
+                 <div id="m-rain" style="font-size:1.5rem; font-weight:bold; font-family:monospace;">--</div>
+                 <div id="m-rain-status" style="margin-top:5px; font-weight:bold; color:var(--text);">--</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="history-modal" onclick="closeHistory(event)">
+        <div class="modal">
+            <button style="float:right; background:none; border:none; font-size:2rem; cursor:pointer; color:var(--text)" onclick="closeHistory(true)">×</button>
+            <h2>⚠️ ALERT HISTORY</h2>
+            <div id="history-list">Loading...</div>
+        </div>
+    </div>
+
+    <footer>&copy; 2026 Flood Sentry Enterprise Solutions</footer>
+
+    <script>
+        // --- SOCKET SETUP ---
+        const socket = io();
+        let allNodes = {}; 
+        let currentlyOpenNodeId = null;
+
+        // --- UTILS ---
+        function setCookie(name, value, hours) {
+            let d = new Date(); d.setTime(d.getTime() + (hours*60*60*1000));
+            document.cookie = name + "=" + value + ";expires=" + d.toUTCString() + ";path=/";
+        }
+        function getCookie(name) {
+            let n = name + "=";
+            let ca = document.cookie.split(';');
+            for(let i=0; i<ca.length; i++) {
+                let c = ca[i];
+                while (c.charAt(0)==' ') c = c.substring(1);
+                if (c.indexOf(n) == 0) return c.substring(n.length, c.length);
+            }
+            return "";
+        }
+
+        // --- NEW HELPER: FORMAT SENSOR READING ---
+        function formatSensor(val) {
+            // ** UPDATE: Handle -1 as NO ECHO **
+            if (val === -1) return `<span class="val-error">NO ECHO</span>`;
+            if (val === 0) return `<span class="val-error">SIGNAL LOSS</span>`;
+            if (val > 200) return `<span class="val-error">RECALIBRATE</span>`;
+            return val + " cm";
+        }
+
+        // --- THEME ---
+        function toggleTheme(e) {
+            const mode = e.checked ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', mode);
+            localStorage.setItem('theme', mode);
+        }
+        if (localStorage.getItem('theme') === 'light') {
+            document.getElementById('theme-toggle').checked = true;
+            document.documentElement.setAttribute('data-theme', 'light');
+        }
+
+        // --- AUDIO ---
+        let isMuted = false;
+        let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let alarmInt = null;
+
+        function playBeep() {
+            if(isMuted) return;
+            const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+            o.connect(g); g.connect(audioCtx.destination);
+            o.type='square'; o.frequency.value=800; 
+            o.start(); setTimeout(()=>o.stop(), 200);
+        }
+
+        function startAlarm() {
+            if(!alarmInt && !isMuted) alarmInt = setInterval(playBeep, 500);
+        }
+        function stopLocalSound() {
+            if(alarmInt) clearInterval(alarmInt);
+            alarmInt = null;
+        }
+
+        // --- SOS LOGIC ---
+        let currentAlertId = null;
+
+        function handleSOS(alertData) {
+            if(!alertData) return;
+            currentAlertId = alertData.id;
+            const ignored = getCookie("ignore_" + currentAlertId) === "true";
+            const overlay = document.getElementById('sos-screen');
+            const statusInd = document.getElementById('status-indicator');
+
+            if (!ignored) {
+                statusInd.innerText = "⚠ ACTIVE SOS ALERT";
+                statusInd.style.color = "var(--danger)";
+                
+                if (overlay.style.display !== 'none' && !isMuted) {
+                        overlay.style.display = 'flex';
+                        document.getElementById('sos-msg').innerText = `User: ${alertData.user}`;
+                        startAlarm();
+                }
+            } else {
+                statusInd.innerText = "⚠ SOS (Ignored by you)";
+                statusInd.style.color = "var(--warning)";
+            }
+        }
+
+        function clearSOS() {
+            currentAlertId = null;
+            isMuted = false;
+            stopLocalSound();
+            document.getElementById('sos-screen').style.display = 'none';
+            document.getElementById('status-indicator').innerText = "● System Normal";
+            document.getElementById('status-indicator').style.color = "var(--success)";
+        }
+
+        function acknowledgeAlert() {
+            isMuted = true; 
+            stopLocalSound();
+            document.getElementById('sos-screen').style.display = 'none';
+        }
+
+        function ignoreAlert() {
+            if(currentAlertId) setCookie("ignore_" + currentAlertId, "true", 1);
+            isMuted = true;
+            stopLocalSound();
+            document.getElementById('sos-screen').style.display = 'none';
+        }
+
+        function sendSOS() {
+            if(!confirm("TRIGGER GLOBAL SOS?")) return;
+            fetch('/api/sos', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ user:"WEB_ADMIN", latitude:0, longitude:0, type:"MANUAL" })
+            });
+        }
+
+        function resolveGlobal() {
+            if(!confirm("RESOLVE ALERT FOR EVERYONE?")) return;
+            fetch('/api/sos/clear', {method:'POST'}).then(()=>{
+                openHistory(); 
+            });
+        }
+
+        // --- REAL-TIME SOCKET HANDLERS ---
+        socket.on('init', (data) => {
+            allNodes = data;
+            if(data.SERVER_ALERT) handleSOS(data.SERVER_ALERT);
+            renderGrid();
+        });
+
+        socket.on('node-update', (nodeData) => {
+            allNodes[nodeData.id] = nodeData;
+            allNodes[nodeData.id].isOffline = false; 
+            
+            renderGrid();
+            
+            if (currentlyOpenNodeId === nodeData.id) {
+                updateModalContent(nodeData);
+            }
+        });
+
+        socket.on('node-offline', (id) => {
+            if(allNodes[id]) {
+                allNodes[id].isOffline = true;
+                renderGrid();
+            }
+        });
+
+        socket.on('sos-active', (alertData) => {
+            handleSOS(alertData);
+        });
+
+        socket.on('sos-cleared', () => {
+            clearSOS();
+        });
+
+        // --- RENDER GRID ---
+        function renderGrid() {
+            const grid = document.getElementById('node-grid');
+            grid.innerHTML = "";
+            let count = 0;
+            
+            for(const [k,v] of Object.entries(allNodes)) {
+                if(k === 'SERVER_ALERT') continue;
+                count++;
+                
+                // Logic: Flood is only valid if reading is valid (>45 AND <200)
+                // -1 and 0 are ignored for flood alerts
+                const s1Flood = (v.s1 > 45 && v.s1 < 200);
+                const s2Flood = (v.s2 > 45 && v.s2 < 200);
+                const s3Flood = (v.s3 > 45 && v.s3 < 200);
+                const rainFlood = (v.rain < 1500);
+
+                const isCrit = (s1Flood || s2Flood || s3Flood || rainFlood) && !v.isOffline;
+                const statusBadge = v.isOffline 
+                    ? `<span class="badge bg-gray">OFFLINE</span>` 
+                    : (isCrit ? `<span class="badge bg-red">ALERT</span>` : `<span class="badge bg-green">ACTIVE</span>`);
+
+                const card = document.createElement('div');
+                card.className = `card ${v.isOffline?'offline':(isCrit?'danger':'safe')}`;
+                card.onclick = () => showNode(k,v);
+                
+                card.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px">
+                        <b style="font-size:1.1rem">${k}</b> 
+                        ${statusBadge}
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Sensor 1:</span>
+                        <span class="metric-val">${formatSensor(v.s1)}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Sensor 2:</span>
+                        <span class="metric-val">${formatSensor(v.s2)}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Sensor 3:</span>
+                        <span class="metric-val">${formatSensor(v.s3)}</span>
+                    </div>
+                `;
+                grid.appendChild(card);
+            }
+            document.getElementById('node-count').innerText = count + " Active";
+            document.getElementById('empty-state').style.display = count>0 ? 'none' : 'block';
+        }
+
+        // --- NODE MODAL ---
+        function updateModalContent(d) {
+            const fill = (v,l,t) => {
+                if(v === -1) {
+                    // ** NEW: NO ECHO LOGIC **
+                    document.getElementById(t).innerHTML = '<span class="val-error">SIGNAL LOSS</span>';
+                    document.getElementById(l).style.height = '0%';
+                    document.getElementById(l).style.backgroundColor = 'var(--offline)'; 
+                } else if(v === 0) {
+                    document.getElementById(t).innerHTML = '<span class="val-error">SIGNAL LOSS</span>';
+                    document.getElementById(l).style.height = '0%';
+                    document.getElementById(l).style.backgroundColor = 'var(--offline)'; 
+                } else if(v > 200) {
+                     document.getElementById(t).innerHTML = '<span class="val-error">RECALIBRATE</span>';
+                     document.getElementById(l).style.height = '100%';
+                     document.getElementById(l).style.backgroundColor = 'var(--warning)';
+                } else {
+                    document.getElementById(t).innerText = v + " cm";
+                    document.getElementById(l).style.height = Math.min(100, (v/60)*100) + '%';
+                    document.getElementById(l).style.backgroundColor = 'var(--primary)';
+                }
+            }
+            fill(d.s1,'m-l1','m-v1'); 
+            fill(d.s2,'m-l2','m-v2'); 
+            fill(d.s3,'m-l3','m-v3');
+            
+            // Rain Logic
+            const rainVal = document.getElementById('m-rain');
+            const rainStat = document.getElementById('m-rain-status');
+            rainVal.innerText = d.rain;
+            
+            if(d.rain < 1500) {
+                rainVal.style.color = "var(--danger)";
+                rainStat.innerText = "HEAVY STORM (DANGER)";
+                rainStat.style.color = "var(--danger)";
+            } else if(d.rain < 3000) {
+                rainVal.style.color = "var(--warning)";
+                rainStat.innerText = "MODERATE RAIN";
+                rainStat.style.color = "var(--warning)";
+            } else {
+                rainVal.style.color = "var(--success)";
+                rainStat.innerText = "DRY / CLEAR"; 
+                rainStat.style.color = "var(--success)";
+            }
+        }
+
+        function showNode(id, d) {
+            currentlyOpenNodeId = id; 
+            document.getElementById('node-modal').style.display = 'flex';
+            document.getElementById('m-title').innerText = id + " LIVE VIEW";
+            updateModalContent(d);
+        }
+
+        function closeNodeModal(force) { 
+            if(force || event.target.id==='node-modal') {
+                document.getElementById('node-modal').style.display='none'; 
+                currentlyOpenNodeId = null; 
+            }
+        }
+
+        // --- HISTORY LOGIC ---
+        function openHistory() {
+            document.getElementById('history-modal').style.display = 'flex';
+            fetch('/api/history').then(r=>r.json()).then(data => {
+                const list = document.getElementById('history-list');
+                list.innerHTML = "";
+                if(data.length === 0) list.innerHTML = "<p>No alerts recorded.</p>";
+                
+                data.forEach(item => {
+                    const status = item.status;
+                    let rowClass = 'h-resolved';
+                    let tagClass = 'tag-done';
+                    
+                    if(status === 'ACTIVE') {
+                        rowClass = 'h-active';
+                        tagClass = 'tag-live';
+                    } else if (status === 'EXPIRED') {
+                        rowClass = 'h-expired';
+                        tagClass = 'tag-exp';
+                    }
+
+                    const div = document.createElement('div');
+                    div.className = `history-item ${rowClass}`;
+                    
+                    div.innerHTML = `
+                        <div>
+                            <span class="h-status ${tagClass}">${status}</span>
+                            <strong style="margin-left:10px;">${item.user}</strong> 
+                            <span style="font-size:0.9rem; margin-left:10px; opacity:0.8">${new Date(item.time).toLocaleTimeString()}</span>
+                            <div style="font-size:0.8rem; margin-top:5px; opacity:0.7">ID: ${item.id}</div>
+                        </div>
+                        ${status === 'ACTIVE' ? `<button class="btn-resolve-small" onclick="resolveGlobal()">✅ RESOLVE</button>` : ''}
+                    `;
+                    list.appendChild(div);
+                });
+            });
+        }
+        function closeHistory(e) { if(e===true || event.target.id==='history-modal') document.getElementById('history-modal').style.display='none'; }
+    </script>
+</body>
+</html>

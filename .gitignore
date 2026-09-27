@@ -1,23 +1,26 @@
 # Dependencies
 node_modules/
+**/node_modules/
 venv/
+**/venv/
 .venv/
-env/
+**/env/
 
 # Python
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 
-# Git
-.git/
-
 # IDE
 .vscode/
+**/.vscode/
 .idea/
+**/.idea/
 
 # Android / Gradle generated files
 .gradle/
+**/.gradle/
 **/build/
 **/.cxx/
 
